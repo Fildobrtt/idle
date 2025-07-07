@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fitness Idle Game</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+        }
+        .lucide {
+            display: inline-block;
+            width: 1em;
+            height: 1em;
+            stroke-width: 2;
+            stroke: currentColor;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+        
+        // Простые иконки как SVG компоненты
+        const Dumbbell = ({ size = 24, className = "" }) => (
+            <svg className={`lucide ${className}`} width={size} height={size} viewBox="0 0 24 24">
+                <path d="M14.4 14.4 9.6 9.6"/>
+                <path d="M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767 1.767a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.829 2.828z"/>
+                <path d="M21.5 21.5l-1.4-1.4"/>
+                <path d="M3.9 3.9l1.4 1.4"/>
+                <path d="M6.404 12.768a2 2 0 1 1-2.829-2.829l1.768-1.767a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.829 2.828z"/>
+            </svg>
+        );
+        
+        const Activity = ({ size = 24, className = "" }) => (
+            <svg className={`lucide ${className}`} width={size} height={size} viewBox="0 0 24 24">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+        );
+        
+        const Target = ({ size = 24, className = "" }) => (
+            <svg className={`lucide ${className}`} width={size} height={size} viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"/>
+                <circle cx="12" cy="12" r="6"/>
+                <circle cx="12" cy="12" r="2"/>
+            </svg>
+        );
+        
+        const Clock = ({ size = 24, className = "" }) => (
+            <svg className={`lucide ${className}`} width={size} height={size} viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12,6 12,12 16,14"/>
+            </svg>
+        );
+
+        const FitnessIdleApp = () => {
+          const [strength, setStrength] = useState(0);
+          const [lastUpdateTime, setLastUpdateTime] = useState(Date.now());
+          
+          // Записи упражнений
+          const [exercises, setExercises] = useState([]);
+          
+          // Формы для ввода
+          const [pushups, setPushups] = useState('');
+          const [pullups, setPullups] = useState('');
+          const [abs, setAbs] = useState('');
+          const [plank, setPlank] = useState('');
+
+          // Коэффициенты для расчета силы
+          const RATES = {
+            pushups: 0.01, // за 100 отжиманий = 0.01 в минуту
+            pullups: 0.07, // за 100 подтягиваний = 0.07 в час
+            abs: 0.01, // за 100 пресса = 0.01 в час
+            plank: 0.06 // за 5 минут планки = 0.06 в час
+          };
+
+          // Telegram Web App интеграция
+          useEffect(() => {
+            if (window.Telegram?.WebApp) {
+              const tg = window.Telegram.WebApp;
+              tg.ready();
+              tg.expand();
+              
+              // Настройка темы под Telegram
+              const themeParams = tg.themeParams;
+              if (themeParams.bg_color) {
+                document.body.style.backgroundColor = themeParams.bg_color;
+              }
+              
+              // Главная кнопка для отправки прогресса
+              tg.MainButton.text = "Поделиться прогрессом 💪";
+              tg.MainButton.color = "#4F46E5";
+              tg.MainButton.show();
+              
+              const sendProgress = () => {
+                const progressData = {
+                  strength: strength.toFixed(6),
+                  exerciseCount: exercises.length,
+                  activeExercises: exercises.filter(ex => (Date.now() - ex.timestamp) / (1000 * 60 * 60 * 24) <= 7).length
+                };
+                tg.sendData(JSON.stringify(progressData));
+              };
+              
+              tg.MainButton.onClick(sendProgress);
+            }
+          }, [strength, exercises]);
+
+          // Загружаем данные при запуске
+          useEffect(() => {
+            const savedStrength = parseFloat(localStorage.getItem('fitnessStrength')) || 0;
+            const savedExercises = JSON.parse(localStorage.getItem('fitnessExercises')) || [];
+            const savedLastUpdate = parseInt(localStorage.getItem('fitnessLastUpdate')) || Date.now();
+
+            setStrength(savedStrength);
+            setExercises(savedExercises);
+            setLastUpdateTime(savedLastUpdate);
+
+            // Пересчитываем силу за время отсутствия
+            const timeDiff = Date.now() - savedLastUpdate;
+            const hoursOffline = timeDiff / (1000 * 60 * 60);
+            const currentRate = calculateCurrentRate(savedExercises);
+            const offlineGain = currentRate * hoursOffline;
+            
+            setStrength(Math.max(0, savedStrength + offlineGain));
+          }, []);
+
+          // Рассчитываем текущую скорость набора/потери силы
+          const calculateCurrentRate = useCallback((exerciseList) => {
+            const now = Date.now();
+            let totalRate = 0;
+
+            exerciseList.forEach(exercise => {
+              const daysSinceExercise = (now - exercise.timestamp) / (1000 * 60 * 60 * 24);
+              
+              if (daysSinceExercise <= 7) {
+                // Положительный эффект в первые 7 дней
+                const rate = exercise.rate;
+                totalRate += rate;
+              } else {
+                // Отрицательный эффект после 7 дней
+                const rate = exercise.rate;
+                totalRate -= rate * 0.1; // 10% от изначальной скорости в минус
+              }
+            });
+
+            return totalRate;
+          }, []);
+
+          // Основной таймер
+          useEffect(() => {
+            const interval = setInterval(() => {
+              const now = Date.now();
+              const timeDiff = now - lastUpdateTime;
+              const hoursElapsed = timeDiff / (1000 * 60 * 60);
+              
+              const currentRate = calculateCurrentRate(exercises);
+              const strengthGain = currentRate * hoursElapsed;
+              
+              setStrength(prev => Math.max(0, prev + strengthGain));
+              setLastUpdateTime(now);
+              
+              // Сохраняем в localStorage
+              localStorage.setItem('fitnessStrength', (strength + strengthGain).toString());
+              localStorage.setItem('fitnessLastUpdate', now.toString());
+            }, 1000);
+
+            return () => clearInterval(interval);
+          }, [lastUpdateTime, exercises, calculateCurrentRate, strength]);
+
+          // Сохранение данных
+          useEffect(() => {
+            localStorage.setItem('fitnessStrength', strength.toString());
+            localStorage.setItem('fitnessExercises', JSON.stringify(exercises));
+          }, [strength, exercises]);
+
+          // Добавление упражнения
+          const addExercise = (type, count) => {
+            if (count <= 0) return;
+            
+            let rate = 0;
+            let description = '';
+            
+            switch (type) {
+              case 'pushups':
+                rate = (count / 100) * RATES.pushups / 60; // переводим в час
+                description = `${count} отжиманий`;
+                break;
+              case 'pullups':
+                rate = (count / 100) * RATES.pullups;
+                description = `${count} подтягиваний`;
+                break;
+              case 'abs':
+                rate = (count / 100) * RATES.abs;
+                description = `${count} пресса`;
+                break;
+              case 'plank':
+                rate = (count / 5) * RATES.plank;
+                description = `${count} мин планки`;
+                break;
+            }
+
+            const newExercise = {
+              id: Date.now(),
+              type,
+              count,
+              rate,
+              description,
+              timestamp: Date.now()
+            };
+
+            setExercises(prev => [...prev, newExercise]);
+            
+            // Очищаем форму
+            switch (type) {
+              case 'pushups': setPushups(''); break;
+              case 'pullups': setPullups(''); break;
+              case 'abs': setAbs(''); break;
+              case 'plank': setPlank(''); break;
+            }
+            
+            // Haptic feedback для Telegram
+            if (window.Telegram?.WebApp) {
+              window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+            }
+          };
+
+          const currentRate = calculateCurrentRate(exercises);
+          const activeExercises = exercises.filter(ex => (Date.now() - ex.timestamp) / (1000 * 60 * 60 * 24) <= 7);
+          const expiredExercises = exercises.filter(ex => (Date.now() - ex.timestamp) / (1000 * 60 * 60 * 24) > 7);
+
+          return (
+            <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 text-white p-4">
+              <div className="max-w-4xl mx-auto">
+                <div className="text-center mb-8">
+                  <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent">
+                    Fitness Idle Game
+                  </h1>
+                  <p className="text-gray-300">Качайте силу даже когда не играете!</p>
+                </div>
+
+                {/* Главная панель */}
+                <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl p-6 mb-6 border border-gray-700">
+                  <div className="flex items-center justify-center mb-4">
+                    <div className="flex items-center gap-3">
+                      <Dumbbell size={32} className="text-yellow-400" />
+                      <div className="text-center">
+                        <h2 className="text-2xl font-bold">Сила: {strength.toFixed(6)}</h2>
+                        <p className="text-gray-400">
+                          {currentRate >= 0 ? '+' : ''}{(currentRate * 3600).toFixed(6)}/час
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Формы добавления упражнений */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl p-6 border border-gray-700">
+                    <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                      <Activity className="text-blue-400" />
+                      Добавить упражнения
+                    </h3>
+                    
+                    <div className="space-y-4">
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={pushups}
+                          onChange={(e) => setPushups(e.target.value)}
+                          placeholder="Отжимания"
+                          className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          onClick={() => addExercise('pushups', parseInt(pushups))}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                        >
+                          +
+                        </button>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={pullups}
+                          onChange={(e) => setPullups(e.target.value)}
+                          placeholder="Подтягивания"
+                          className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          onClick={() => addExercise('pullups', parseInt(pullups))}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                        >
+                          +
+                        </button>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={abs}
+                          onChange={(e) => setAbs(e.target.value)}
+                          placeholder="Пресс"
+                          className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          onClick={() => addExercise('abs', parseInt(abs))}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                        >
+                          +
+                        </button>
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={plank}
+                          onChange={(e) => setPlank(e.target.value)}
+                          placeholder="Планка (мин)"
+                          className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          onClick={() => addExercise('plank', parseInt(plank))}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Статистика */}
+                  <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl p-6 border border-gray-700">
+                    <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                      <Target className="text-green-400" />
+                      Статистика
+                    </h3>
+                    
+                    <div className="space-y-3">
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Активных упражнений:</span>
+                        <span className="text-green-400">{activeExercises.length}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Устаревших:</span>
+                        <span className="text-red-400">{expiredExercises.length}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Скорость/час:</span>
+                        <span className={currentRate >= 0 ? 'text-green-400' : 'text-red-400'}>
+                          {currentRate >= 0 ? '+' : ''}{(currentRate * 3600).toFixed(6)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* История упражнений */}
+                <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl p-6 border border-gray-700 mb-20">
+                  <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                    <Clock className="text-purple-400" />
+                    История упражнений
+                  </h3>
+                  
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {exercises.length === 0 ? (
+                      <p className="text-gray-500 text-center py-4">Упражнений пока нет</p>
+                    ) : (
+                      exercises.map(exercise => {
+                        const daysSince = (Date.now() - exercise.timestamp) / (1000 * 60 * 60 * 24);
+                        const isActive = daysSince <= 7;
+                        
+                        return (
+                          <div
+                            key={exercise.id}
+                            className={`flex justify-between items-center p-3 rounded-lg ${
+                              isActive ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'
+                            }`}
+                          >
+                            <div>
+                              <span className="font-semibold">{exercise.description}</span>
+                              <span className="text-sm text-gray-400 ml-2">
+                                ({daysSince.toFixed(1)} дней назад)
+                              </span>
+                            </div>
+                            <div className="text-right">
+                              <div className={`text-sm ${isActive ? 'text-green-400' : 'text-red-400'}`}>
+                                {isActive ? '+' : '-'}{Math.abs(exercise.rate * 3600).toFixed(6)}/час
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // Рендер приложения
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<FitnessIdleApp />);
+    </script>
+</body>
+</html>
